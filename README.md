@@ -1,51 +1,69 @@
-# CyberWolfScanner — Working Principles, Flowcharts, and References
+## Intelligent Automated Security Analysis System
+---
 
-This document explains **how CyberWolfScanner works** end-to-end: user interaction, scan orchestration, modular checks, aggregation, reporting, and error handling. It complements the diagrams under `Document/assets/flowcharts/` (SVG) and `Document/07_System_Architecture.md` / `Document/10_Dataflow_Workflow_Tables.md`.
+## 0. Overall system flow (one diagram)
 
-**How to view large diagrams:** Mermaid charts below are intentionally wide and layered. If your preview truncates them, open the file in [Mermaid Live Editor](https://mermaid.live) or export from GitHub/GitLab Markdown preview at full width.
+
+```mermaid
+flowchart LR
+    A[User enters URL] --> B{UI choice}
+    B --> C[Flask web UI]
+    B --> D[Streamlit UI]
+    C --> E[validate_url]
+    D --> E
+    E --> F{URL valid?}
+    F -->|no| G[Show error]
+    F -->|yes| H[VulnerabilityScanner]
+    H --> I[Thread pool: run enabled modules]
+    I --> J[Merge results and summary]
+    J --> K[Risk level from counts]
+    K --> L[Report and dashboard]
+```
+
+### Deep explanation (overall)
+
+The only mandatory path is: **capture URL → validate → orchestrate scans → merge → risk label → present**. Flask may additionally validate an API key when the user picks an API-style scan. Streamlit may call helpers such as web scraping or AI analysis in parallel with or after scans; those paths are optional overlays on the same core.
 
 ---
 
 ## 1. Large-scale system architecture (layered)
 
-This diagram shows **every major responsibility area**: who the user talks to, what validates input, what runs in parallel, what produces artifacts, and where optional AI fits. Arrows are read as “data or control flows to.”
-
 ```mermaid
 flowchart TB
     subgraph CLIENT["Client / operator"]
-        U[("User / security analyst")]
+        U["User / security analyst"]
     end
 
-    subgraph PRES["Presentation layer — two UIs"]
-        F["Flask web app\n`app.py` + `templates/`\nforms, REST-style hooks, sessions"]
-        ST["Streamlit dashboard\n`wolf.py`\ncharts, multi-step workflows"]
+    subgraph PRES["Presentation layer - two UIs"]
+        F["Flask web app: app.py and templates\nforms, REST-style hooks, sessions"]
+        ST["Streamlit dashboard: wolf.py\ncharts and multi-step workflows"]
     end
 
     subgraph CROSS["Cross-cutting input control"]
-        V["URL & target validation\n`utils/validator.py`\nreject malformed URLs early"]
-        AKM["API key lifecycle (Flask path)\n`ApiKeyManager` + `api_keys.json`\ngenerate / validate / revoke"]
+        V["URL and target validation: utils/validator.py\nreject malformed URLs early"]
+        AKM["API key lifecycle Flask path: ApiKeyManager and api_keys.json\ngenerate, validate, revoke"]
     end
 
-    subgraph ORCH["Orchestration — single coordinator"]
-        VS["`VulnerabilityScanner`\n`modules/scanner.py`\nconstructs all scanner objects,\nmerges `results` + `summary`"]
+    subgraph ORCH["Orchestration - single coordinator"]
+        VS["VulnerabilityScanner in modules/scanner.py\nbuilds all scanner objects, merges results and summary"]
     end
 
-    subgraph MODS["Scanning layer — modular DAST-style probes"]
+    subgraph MODS["Scanning layer - modular DAST-style probes"]
         direction TB
-        M_WEB["Web attack surface\nXSS · SQLi · paths · misconfig · CSRF · IDOR"]
-        M_PROTO["Protocol & transport\nSSL/TLS · ports · API surface"]
-        M_ADV["Advanced patterns\nXXE · SSRF · RCE · JWT · bruteforce heuristics"]
+        M_WEB["Web attack surface: XSS, SQLi, paths, misconfig, CSRF, IDOR"]
+        M_PROTO["Protocol and transport: SSL/TLS, ports, API surface"]
+        M_ADV["Advanced: XXE, SSRF, RCE, JWT, bruteforce heuristics"]
     end
 
-    subgraph AUX["Auxiliary analysis (optional paths)"]
-        WS["`web_scraper.py`\ncrawl / extract context"]
-        NS["`modules/network_scanner.py` / `subdomain_finder.py`\nDNS & network context"]
-        AI["`wolf_api.py` · `security_analyzer.py`\nLLM / API-assisted narration"]
+    subgraph AUX["Auxiliary analysis optional paths"]
+        WS["web_scraper.py: crawl and context"]
+        NS["network_scanner.py and subdomain_finder.py\nDNS and network context"]
+        AI["wolf_api.py and security_analyzer.py\nLLM or API-assisted narration"]
     end
 
     subgraph OUT["Outputs"]
-        RG["`report_generator.py`\n`utils/reporter.py`\nHTML / structured report"]
-        UI_OUT["Rendered UI\n`results.html` or Streamlit components"]
+        RG["report_generator.py and utils/reporter.py\nHTML and structured report"]
+        UI_OUT["Rendered UI: results.html or Streamlit views"]
     end
 
     U --> F
@@ -53,8 +71,8 @@ flowchart TB
     F --> V
     ST --> V
     F --> AKM
-    AKM -.->|"if API scan mode"| VS
-    V -->|"valid URL, timeout, api_key"| VS
+    AKM -.->|if API scan mode| VS
+    V -->|valid URL, timeout, api_key| VS
     ST --> VS
 
     VS --> M_WEB
@@ -73,150 +91,143 @@ flowchart TB
 
 ### Deep explanation (architecture)
 
-1. **Dual UI is intentional.** Flask gives a traditional multi-page scan/report experience; Streamlit favors rapid dashboards and richer widgets. Both must agree on the same contract toward the backend: a **normalized URL**, optional **module flags**, and a **timeout**.
-
-2. **Validation before orchestration** avoids SSRF-style misuse and reduces noise: the scanner constructor calls `validate_url`; failure raises before any `ThreadPoolExecutor` work starts.
-
-3. **Modular scanners** are not one giant script. Each file under `modules/*_scanner.py` owns one OWASP-aligned or infrastructure-aligned concern. That mirrors how professional DAST tools separate **rule packs**.
-
-4. **Optional AI and crawling** do not replace the scanners; they **annotate** or **expand context** (e.g., explaining findings for non-experts). When the API is down, UIs can fall back to deterministic output.
+1. **Dual UI:** Flask suits classic multi-page flows; Streamlit suits dashboards. Both should pass the same backend contract: normalized URL, optional module flags, timeout.
+2. **Validation first** avoids useless traffic; invalid URLs raise before ThreadPoolExecutor work (`validate_url` in scanner constructor).
+3. **Modular scanners** live under `modules/` as separate concerns, similar to rule packs in commercial DAST tools.
+4. **AI and scraping** augment output; they do not replace module findings.
 
 ---
 
 ## 2. End-to-end operational lifecycle (from click to risk label)
 
-Walk-through of what happens **from a single user decision** (“scan this URL”) to a **published risk level** and report.
-
 ```mermaid
 flowchart TD
     START([User submits target URL]) --> CHOOSE{Which surface?}
 
-    CHOOSE -->|Flask `POST /scan`| F1[Read `url`, `scan_type`, optional `api_key`]
+    CHOOSE -->|Flask POST /scan| F1[Read url, scan_type, optional api_key]
     CHOOSE -->|Streamlit action| S1[Read widget state:\nURL, toggles, timeouts]
 
-    F1 --> FAPI{`scan_type == api`?}
-    FAPI -->|yes| VALKEY[Validate key via `ApiKeyManager`]
+    F1 --> FAPI{scan_type is api?}
+    FAPI -->|yes| VALKEY[Validate key via ApiKeyManager]
     FAPI -->|no| BUILD
     VALKEY -->|invalid| ERR1[Flash error / stop]
-    VALKEY -->|valid| BUILD[Build `options` dict:\nwhich modules run]
+    VALKEY -->|valid| BUILD[Build options dict:\nwhich modules run]
 
     S1 --> BUILD
 
-    BUILD --> VALURL[`validate_url(url)`]
+    BUILD --> VALURL[Call validate_url]
     VALURL -->|fail| ERR2[Show error:\ninvalid URL format]
-    VALURL -->|pass| CONS["`VulnerabilityScanner(url, timeout, api_key)`\nallocate 13 scanner instances"]
+    VALURL -->|pass| CONS[Construct VulnerabilityScanner:\nurl, timeout, api_key\n13 scanner instances]
 
-    CONS --> RUN["`run_all_scans(options)`"]
-    RUN --> POOL["`ThreadPoolExecutor(max_workers=8)`\nsubmit one future per enabled module"]
+    CONS --> RUN[run_all_scans options]
+    RUN --> POOL[ThreadPoolExecutor max_workers 8\nsubmit one future per enabled module]
 
-    POOL --> WAIT["`as_completed(futures)`\nstream results as threads finish"]
-    WAIT --> EACH{Per future:\n`future.result(timeout)`}
+    POOL --> WAIT[as_completed futures\nstream results as threads finish]
+    WAIT --> EACH{Per future:\nfuture.result with timeout}
 
-    EACH -->|success| STORE["`results[module] = list of findings`\n`summary[module] = count`"]
-    EACH -->|exception| SAFE["Log error\n`results[module] = []`\n`summary[module] = 0`"]
+    EACH -->|success| STORE[results module list\nsummary module count]
+    EACH -->|exception| SAFE[Log error\nempty list and count 0]
 
     STORE --> MORE{More futures?}
     SAFE --> MORE
     MORE -->|yes| WAIT
-    MORE -->|no| TOT["`total_vulnerabilities` = sum of summary counts"]
+    MORE -->|no| TOT[total_vulnerabilities sum of summary counts]
 
-    TOT --> RISK{"Threshold rules\n(see `scanner.py`)"}
-    RISK -->|total == 0| RL0["`MINIMAL`"]
-    RISK -->|1–2| RL1["`LOW`"]
-    RISK -->|3–5| RL2["`MEDIUM`"]
-    RISK -->|6–10| RL3["`HIGH`"]
-    RISK -->|greater than 10| RL4["`CRITICAL`"]
+    TOT --> RISK{Apply threshold rules\nsee scanner.py}
+    RISK -->|total equals 0| RL0[MINIMAL]
+    RISK -->|1 to 2| RL1[LOW]
+    RISK -->|3 to 5| RL2[MEDIUM]
+    RISK -->|6 to 10| RL3[HIGH]
+    RISK -->|greater than 10| RL4[CRITICAL]
 
-    RL0 & RL1 & RL2 & RL3 & RL4 --> PACK["Attach `risk_level` + `total_vulnerabilities`\nto `results['summary']`"]
-    PACK --> REP["Flask: `generate_report` / render template\nStreamlit: dataframe + charts"]
+    RL0 --> PACK
+    RL1 --> PACK
+    RL2 --> PACK
+    RL3 --> PACK
+    RL4 --> PACK
+    PACK[Attach risk_level and total_vulnerabilities\nto results summary]
+    PACK --> REP[Flask: generate_report and template\nStreamlit: dataframes and charts]
     REP --> END([User reviews / exports])
 
-    RUN -.->|KeyboardInterrupt| KI[Return partial `results`]
+    RUN -.->|KeyboardInterrupt| KI[Return partial results]
     KI --> END
 ```
 
 ### Deep explanation (lifecycle)
 
-1. **`options` is the feature switch.** If `options` is omitted, `run_all_scans` enables every module (XSS through SSL). Partial scans are just a sparse `options` map.
+1. **`options`:** If omitted, all modules run; otherwise only keys set true run.
+2. **Pool size 8:** Caps concurrent module work.
+3. **Per-module errors:** One failing module does not clear others.
+4. **Risk label:** Count-derived heuristic, not CVSS.
 
-2. **Concurrency is bounded at 8 workers**, so sixteen modules do not spawn sixteen unbounded blocking calls; the pool amortizes socket and DNS latency.
-
-3. **Per-module isolation:** a thrown exception in SQLi does not wipe XSS results—the coordinator catches, logs, and stores an empty list for that module only.
-
-4. **Risk is a count-based heuristic**, not CVSS. It is fast to explain to stakeholders but should be documented as **qualitative**, not a substitute for penetration-test severity.
-
-### Alternate view: detailed sequence (Flask path)
-
-Parallel module work appears as repeated `Scanner->>Target` interactions; the coordinator aggregates after all futures settle.
+### Alternate view: sequence diagram (Flask path)
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User browser
-    participant F as Flask app.py
+    participant F as Flask app
     participant V as validate_url
     participant K as ApiKeyManager
     participant C as VulnerabilityScanner
     participant E as ThreadPoolExecutor
-    participant X as Module workers\n(XSS, SQLi, …)
+    participant X as Module workers
     participant T as Target web app
-    participant R as report / template
+    participant R as Report template
 
-    U->>F: POST /scan (url, scan_type, optional api_key)
+    U->>F: POST /scan url scan_type optional api_key
     alt scan_type is api
-        F->>K: validate_key(api_key)
-        K-->>F: ok / reject
+        F->>K: validate_key api_key
+        K-->>F: ok or reject
     end
-    F->>V: validate_url(url)
-    V-->>F: valid / invalid
-    F->>C: new VulnerabilityScanner(url, timeout, api_key)
-    F->>C: run_all_scans(options)
-    C->>E: submit N futures (N = enabled modules, max 8 active)
+    F->>V: validate_url url
+    V-->>F: valid or invalid
+    F->>C: new VulnerabilityScanner
+    F->>C: run_all_scans options
+    C->>E: submit N futures max 8 active
     loop Each enabled scanner
-        E->>X: run _run_*_scan
-        X->>T: HTTP / TLS / socket probes
+        E->>X: run module scan helper
+        X->>T: HTTP TLS socket probes
         T-->>X: responses
-        X-->>C: list of findings (via future)
+        X-->>C: list of findings via future
     end
-    C->>C: as_completed merge counts + lists
-    C->>C: total_vulnerabilities + risk_level
+    C->>C: merge counts and lists
+    C->>C: total_vulnerabilities and risk_level
     C-->>F: results dict
-    F->>R: generate_report / render results.html
-    R-->>U: HTML response + export links
+    F->>R: generate_report and render
+    R-->>U: HTML response
 ```
 
 ---
 
-## 3. Inside `run_all_scans`: futures, summaries, and interrupts
-
-This is the **most code-faithful** view of `modules/scanner.py`: which tasks are submitted, how completion is processed, and where totals are derived.
+## 3. Inside run_all_scans: futures, summaries, interrupts
 
 ```mermaid
 flowchart TB
-    subgraph ENTER["Entry: `run_all_scans(options)`"]
-        O{"`options is None`?"}
-        O -->|yes| DEF["Default: all module keys = True\nxss, sqli, ports, paths, misconfig,\nxxe, ssrf, rce, idor, csrf, jwt,\napi, bruteforce, ssl"]
-        O -->|no| USE["Use caller-provided flags"]
+    subgraph ENTER["Entry run_all_scans options"]
+        O{options is None?}
+        O -->|yes| DEF[Default: all module keys true\nxss sqli ports paths misconfig\nxxe ssrf rce idor csrf jwt\napi bruteforce ssl]
+        O -->|no| USE[Use caller-provided flags]
         DEF --> TP
         USE --> TP
     end
 
-    subgraph POOL["`with ThreadPoolExecutor(max_workers=8)`"]
+    subgraph POOL["ThreadPoolExecutor max_workers 8"]
         direction LR
-        SUB["For each enabled key:\n`executor.submit(self._run_*_scan)`"]
-        MAP["Maintain `scan_tasks`:\nfuture → module name string"]
+        SUB[For each enabled key:\nsubmit run helper on executor]
+        MAP[Keep scan_tasks map:\nfuture to module name]
     end
 
     TP[Begin thread pool] --> SUB
     SUB --> MAP
 
-    subgraph COMP["Completion loop: `as_completed(scan_tasks)`"]
+    subgraph COMP["Completion loop as_completed scan_tasks"]
         FUT[Take next completed future]
-        NAME[Resolve module label from `scan_tasks` map]
+        NAME[Resolve module label from map]
         FUT --> NAME
-        NAME --> TRY{"`future.result(timeout=self.timeout)`"}
-        TRY -->|OK| OK["`results[name] = list`\n`summary[name] = len(list)`"]
-        TRY -->|except| BAD["`results[name] = []`\n`summary[name] = 0`\nlog `Error in {name} scan`"]
+        NAME --> TRY{future.result with timeout}
+        TRY -->|OK| OK[Store results name list\nsummary name length]
+        TRY -->|except| BAD[Empty results name\nsummary zero\nlog error]
         OK --> NEXT
         BAD --> NEXT{More futures?}
         NEXT -->|yes| FUT
@@ -226,54 +237,49 @@ flowchart TB
     MAP --> COMP
 
     subgraph GUARD["Outer exception handling"]
-        KB["`KeyboardInterrupt` →\nmessage + return `results`"]
-        OUTER["Other errors →\nmessage + return `results`"]
+        KB[KeyboardInterrupt:\nmessage and return results]
+        OUTER[Other errors:\nmessage and return results]
     end
 
     DONE --> SUMS
-    SUMS["Sum all numeric values in `summary`\n→ `total_vulnerabilities`"]
+    SUMS[Sum summary values to total_vulnerabilities]
 
-    SUMS --> RISK["Assign `risk_level`:\n>10 CRITICAL\n>5 HIGH\n>2 MEDIUM\n>0 LOW\nelse MINIMAL"]
+    SUMS --> RISK[Assign risk_level:\nover 10 CRITICAL\nover 5 HIGH\nover 2 MEDIUM\nover 0 LOW\nelse MINIMAL]
 
-    RISK --> RET["Return `self.results`"]
+    RISK --> RET[Return self.results]
 
     ENTER -.-> GUARD
 ```
 
 ### Deep explanation (orchestration)
 
-1. **Submit pattern:** each `_run_*` wrapper prints status, then delegates to `some_scanner.scan(self.url, self.api_key)`. That keeps HTTP/session logic inside the specialist class.
-
-2. **`as_completed`:** results are merged **as they finish**, which is why the UI can show streaming logs (terminal) or progressively filled structures if wired that way.
-
-3. **`future.result(timeout=self.timeout)`** ties thread wait to the same SLA as HTTP calls, reducing hangs.
-
-4. **Interrupt safety:** operators stopping a long scan get a **partial snapshot** rather than a silent crash.
+1. **Wrappers:** Each `_run_*` method calls the corresponding scanner.scan(url, api_key).
+2. **as_completed:** Results merge as futures finish.
+3. **future.result(timeout):** Aligns thread wait with scan timeout.
+4. **KeyboardInterrupt:** Returns partial results.
 
 ---
 
-## 4. Generic “single scanner module” deep flow
-
-Every `*_scanner.py` follows the same **logical pipeline**, even if internals differ.
+## 4. Generic single scanner module flow
 
 ```mermaid
 flowchart LR
     subgraph INP["Inputs"]
         URL2["Normalized URL"]
-        KEY["Optional `api_key`"]
-        TO["`timeout` from coordinator"]
+        KEY["Optional api_key"]
+        TO["timeout from coordinator"]
     end
 
     subgraph PHASES["Typical module phases"]
-        P1["1. Prepare request:\nheaders, cookies, method"]
-        P2["2. Emit probes:\npaths, params, payloads, OPTIONS"]
-        P3["3. Observe responses:\nstatus, body snippets, headers"]
-        P4["4. Classify signals:\npatterns, diffs, timing"]
-        P5["5. Emit findings:\nlist of dicts\nseverity, evidence, URL"]
+        P1["1 Prepare request\nheaders cookies method"]
+        P2["2 Emit probes\npaths params payloads"]
+        P3["3 Observe responses\nstatus body headers"]
+        P4["4 Classify signals\npatterns diffs timing"]
+        P5["5 Emit findings\nlist of dicts"]
     end
 
     subgraph OUTM["Module output"]
-        L["Python `list`\nempty = no issues\nnon-empty = potential findings"]
+        L["Python list\nempty means no issues"]
     end
 
     URL2 --> P1
@@ -282,95 +288,69 @@ flowchart LR
     P1 --> P2 --> P3 --> P4 --> P5 --> L
 ```
 
-### Deep explanation (module logic)
-
-1. **Probes are heuristics**, not proofs. A “possible SQLi” banner is an indicator for humans or for a follow-on manual test.
-
-2. **List-shaped results** keep the coordinator simple: it only needs `len(result)` for counting.
-
-3. **Timeouts** propagate so one slow port scan does not redefine the timeout for XSS unless you configure it that way at construction.
-
 ---
 
-## 5. Data model: `results` and `summary` structure
-
-How data is shaped **after** a successful pass through the coordinator (before templates).
+## 5. Data model: results and summary
 
 ```mermaid
 flowchart TB
-    subgraph DICT["`self.results` — top-level dict"]
-        KXSS["`xss`: list"]
-        KSQL["`sqli`: list"]
-        KPORT["`ports`: list"]
-        KPATH["`paths`: list"]
-        KMIS["`misconfig`: list"]
-        KXXE["`xxe`: list"]
-        KSSRF["`ssrf`: list"]
-        KRCE["`rce`: list"]
-        KIDOR["`idor`: list"]
-        KCSRF["`csrf`: list"]
-        KJWT["`jwt`: list"]
-        KAPI["`api`: list"]
-        KBF["`bruteforce`: list"]
-        KSSL["`ssl`: list"]
-        KSUM["`summary`: nested dict"]
+    subgraph DICT["self.results top-level dict"]
+        KXSS["xss: list"]
+        KSQL["sqli: list"]
+        KPORT["ports: list"]
+        KPATH["paths: list"]
+        KMIS["misconfig: list"]
+        KXXE["xxe: list"]
+        KSSRF["ssrf: list"]
+        KRCE["rce: list"]
+        KIDOR["idor: list"]
+        KCSRF["csrf: list"]
+        KJWT["jwt: list"]
+        KAPI["api: list"]
+        KBF["bruteforce: list"]
+        KSSL["ssl: list"]
+        KSUM["summary: nested dict"]
     end
 
-    subgraph SUMK["`summary` keys (after run)"]
-        S1["per-module counts:\n`xss`, `sqli`, … → int"]
-        STOT["`total_vulnerabilities`: int"]
-        SRISK["`risk_level`: str\nMINIMAL…CRITICAL"]
+    subgraph SUMK["summary keys after run"]
+        S1["per-module counts to int"]
+        STOT["total_vulnerabilities int"]
+        SRISK["risk_level string"]
     end
 
     KSUM --> S1
     S1 --> STOT
     STOT --> SRISK
 
-    DICT --> RPTIN["Consumed by\n`report_generator` / Jinja / Streamlit"]
+    DICT --> RPTIN["report_generator,\nJinja, Streamlit"]
 ```
-
-### Deep explanation (data flow)
-
-1. **The UI never needs to know 13 class names**—it iterates keys in `results` excluding `summary`.
-
-2. **`summary` doubles as metrics:** quick charts use counts; drill-down views use the lists.
-
-3. **Optional AI** consumes the same structure: serialize lists to text for a model, or summarize top findings only.
 
 ---
 
-## 6. Error, resilience, and security-relevant control flow
+## 6. Error and resilience
 
 ```mermaid
 flowchart TD
-    subgraph INITERR["Constructor / setup"]
-        BADURL["`validate_url` fails"] --> NOCTOR["`ValueError`\nscanner object not created"]
+    subgraph INITERR["Constructor setup"]
+        BADURL["validate_url fails"] --> NOCTOR["ValueError\nno scanner object"]
     end
 
-    subgraph RUNERR["During `run_all_scans`"]
-        SINGLE["Single module raises"] --> CATCH["Caught at future boundary\nempty result for that module"]
-        TIMEOUT["`future.result` timeout"] --> CATCH
-        NET["HTTP errors in scanner"] --> CATCH2["Usually caught inside module\n→ short or empty list"]
-        KB2["User Ctrl+C"] --> KRET["Interrupt handler\nreturn partial results"]
+    subgraph RUNERR["During run_all_scans"]
+        SINGLE["Single module raises"] --> CATCH["Caught at future\nempty module result"]
+        TIMEOUT["future.result timeout"] --> CATCH
+        NET["HTTP errors in scanner"] --> CATCH2["Caught in module\nshort or empty list"]
+        KB2["User Ctrl+C"] --> KRET["Interrupt handler\npartial results"]
     end
 
     subgraph POST["After merge"]
-        AGGOK["All modules finished or cleared"] --> LABEL["Compute `risk_level`"]
+        AGGOK["All modules finished or cleared"] --> LABEL["Compute risk_level"]
     end
 
     CATCH --> AGGOK
     CATCH2 -.-> AGGOK
-    KRET -.->|"skip label if returned early"| UIEND
-    LABEL --> UIEND([UI / report render])
+    KRET -.->|if returned early| UIEND
+    LABEL --> UIEND([UI and report render])
 ```
-
-### Deep explanation (resilience)
-
-1. **Fail-fast on bad URLs** protects operator time and avoids ambiguous “scans” against junk targets.
-
-2. **Per-module catch** implements **degraded completeness**: you still receive SSL and port data even if RCE heuristics crashed.
-
-3. **Do not confuse resilience with safety:** the tool can still generate **network traffic**; run it only on systems you are authorized to test.
 
 ---
 
